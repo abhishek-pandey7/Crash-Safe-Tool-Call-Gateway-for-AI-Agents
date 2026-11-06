@@ -1,0 +1,42 @@
+# Example gateway configuration. Copy to gateway.yaml and adjust.
+
+listen: ":8080"
+upstream: http://billing-mcp:8080/mcp
+# database_url: postgres://user:pass@localhost:5432/gateway  # or GATEWAY_DATABASE_URL
+
+lease: 30s             # an owner silent this long is presumed gone
+wait_timeout: 5s       # a duplicate waits this long before "in progress"
+upstream_timeout: 60s  # bound on one call to the upstream server
+fallback_window: 60s   # keyless calls with equal arguments group inside this window
+retention: 720h        # result bodies are dropped after this; keys are kept forever
+unknown_tools: at_most_once  # or "refuse"
+
+# auth:
+#   tokens:
+#     change-me-agent-token: billing-agent
+#   # or: principal_header: X-Authenticated-User  (set by a proxy you trust)
+
+# upstream_headers:
+#   Authorization: Bearer upstream-credential
+
+tools:
+  get_invoice:
+    policy: read_only
+
+  find_refund_by_reference:
+    policy: read_only
+
+  send_email:
+    policy: at_most_once
+
+  create_refund:
+    policy: reconcilable
+    require_key: true
+    reconcile:
+      tool: find_refund_by_reference
+      match_argument: reference
+
+  create_charge:
+    policy: native_key
+    require_key: true
+    key_argument: idempotency_key

@@ -51,6 +51,16 @@ func TestParseExample(t *testing.T) {
 	}
 }
 
+func TestExampleConfigLoads(t *testing.T) {
+	c, err := Load("../../gateway.example.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Tools["create_charge"].Policy != NativeKey {
+		t.Fatalf("unexpected example: %+v", c.Tools)
+	}
+}
+
 func TestRefuseUnknownTools(t *testing.T) {
 	c, err := Parse([]byte("upstream: http://u/mcp\nunknown_tools: refuse\n"))
 	if err != nil {
