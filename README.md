@@ -35,7 +35,3 @@ No gateway can provide exactly-once execution with a tool that doesn't cooperate
 ## How it will be tested
 
 Each test compares what actually happened (from the fake tool's own ledger) with what the gateway recorded and what the client was told. The suite kills the gateway at every step, pauses instances past their leases, drops responses and takes Postgres down. It all runs locally in Docker for free, with no LLM API key, GPU or cloud account.
-
-## Documentation
-
-**[Full project description](docs/PROJECT.md)**: the problem and evidence, existing projects, design, test plan, milestones, risks and all sources.

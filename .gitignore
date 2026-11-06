@@ -1,0 +1,18 @@
+# private design notes, kept local only
+docs/PROJECT.md
+
+# build output
+/bin/
+*.exe
+*.test
+*.out
+coverage.*
+
+# local results from the fault suite
+/results/
+
+# editors and os
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
