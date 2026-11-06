@@ -133,6 +133,12 @@ func ErrorResponse(id json.RawMessage, e *RPCError) []byte {
 	return encodeResponse(id, "error", raw)
 }
 
+// RawErrorResponse encodes an error response from an already encoded error
+// object, such as a stored one.
+func RawErrorResponse(id json.RawMessage, errObj json.RawMessage) []byte {
+	return encodeResponse(id, "error", errObj)
+}
+
 func encodeResponse(id json.RawMessage, member string, value json.RawMessage) []byte {
 	if len(id) == 0 {
 		id = json.RawMessage("null")
