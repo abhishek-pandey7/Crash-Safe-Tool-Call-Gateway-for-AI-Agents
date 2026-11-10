@@ -18,23 +18,38 @@ import (
 	"github.com/abhishek-pandey7/Crash-Safe-Tool-Call-Gateway-for-AI-Agents/internal/store/storetest"
 )
 
-// baseConfig is the policy set the end-to-end tests run with.
+// baseConfig is the policy set the end-to-end tests run with. Its verbs
+// are the upstream, the create_refund policy and extra YAML.
 const baseConfig = `
 upstream: %s
 lease: 1s
 wait_timeout: 2s
 upstream_timeout: 5s
 fallback_window: 2s
+reconcile_interval: 500ms
 tools:
   get_invoice: {policy: read_only}
   find_refund_by_reference: {policy: read_only}
-  create_refund: {policy: at_most_once}
+  create_refund: %s
   send_email: {policy: at_most_once}
   create_charge: {policy: native_key, key_argument: idempotency_key}
   confirm_transfer: {policy: at_most_once}
   start_export: {policy: at_most_once}
 %s
 `
+
+// Policies for create_refund.
+const (
+	refundAtMostOnce   = "{policy: at_most_once}"
+	refundReconcilable = "{policy: reconcilable, reconcile: {tool: find_refund_by_reference, match_argument: reference, settle_after: 2s}}"
+)
+
+func configYAML(upstream, refund, extra string) []byte {
+	if refund == "" {
+		refund = refundAtMostOnce
+	}
+	return fmt.Appendf(nil, baseConfig, upstream, refund, extra)
+}
 
 // env is one gateway in front of one fake tool server, backed by a fresh
 // Postgres schema.
@@ -49,6 +64,7 @@ type env struct {
 
 type envOptions struct {
 	upstream string // overrides the fake server's URL
+	refund   string // create_refund policy; at_most_once by default
 	extra    string // extra YAML appended to the config
 	hooks    gateway.Hooks
 	instance string
@@ -68,7 +84,7 @@ func newEnv(t *testing.T, o envOptions) *env {
 	if o.upstream == "" {
 		o.upstream = fakeURL
 	}
-	cfg, err := config.Parse(fmt.Appendf(nil, baseConfig, o.upstream, o.extra))
+	cfg, err := config.Parse(configYAML(o.upstream, o.refund, o.extra))
 	if err != nil {
 		t.Fatal(err)
 	}

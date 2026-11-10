@@ -230,7 +230,7 @@ func runChaos(t *testing.T, seed uint64) {
 	fake, fakeURL := startFake(t)
 	// Latency before every effect widens the windows a kill can hit.
 	fake.AddFault(faketool.Fault{DelayBeforeMs: 100, Times: 1 << 30})
-	cfg := writeConfig(t, fakeURL, "")
+	cfg := writeConfig(t, fakeURL, "", "")
 	db := processDB(t)
 
 	var mu sync.Mutex

@@ -106,10 +106,10 @@ func processDB(t *testing.T) string {
 }
 
 // writeConfig writes the end-to-end policy set for a given upstream.
-func writeConfig(t *testing.T, upstream, extra string) string {
+func writeConfig(t *testing.T, upstream, refund, extra string) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "gateway.yaml")
-	if err := os.WriteFile(path, fmt.Appendf(nil, baseConfig, upstream, extra), 0o600); err != nil {
+	if err := os.WriteFile(path, configYAML(upstream, refund, extra), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	return path
