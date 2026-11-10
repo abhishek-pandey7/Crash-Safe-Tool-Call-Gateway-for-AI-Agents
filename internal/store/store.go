@@ -71,6 +71,8 @@ type Operation struct {
 	CreatedAt    time.Time
 	DispatchedAt *time.Time
 	FinishedAt   *time.Time
+	// ReconcileRef is the raw JSON value a reconciliation read looks up.
+	ReconcileRef json.RawMessage
 	// Now is the database clock when the row was read.
 	Now time.Time
 }
@@ -145,7 +147,7 @@ func (s *Store) Ping(ctx context.Context) error { return s.pool.Ping(ctx) }
 
 const columns = `op_key, key_base, generation, key_source, principal, upstream, tool, policy,
 	args_hash, state, owner, fence, lease_until, attempts, result_kind, result, result_hash,
-	result_purged, last_detail, created_at, dispatched_at, finished_at, now()`
+	result_purged, last_detail, created_at, dispatched_at, finished_at, reconcile_ref, now()`
 
 func scanOp(row pgx.Row) (*Operation, error) {
 	var (
@@ -157,7 +159,7 @@ func scanOp(row pgx.Row) (*Operation, error) {
 	err := row.Scan(&o.Key, &o.KeyBase, &o.Generation, &o.Source, &o.Principal, &o.Upstream,
 		&o.Tool, &o.Policy, &o.ArgsHash, &state, &owner, &o.Fence, &o.LeaseUntil, &o.Attempts,
 		&resultKind, &o.Result, &o.ResultHash, &o.ResultPurged, &o.Detail, &o.CreatedAt,
-		&o.DispatchedAt, &o.FinishedAt, &o.Now)
+		&o.DispatchedAt, &o.FinishedAt, &o.ReconcileRef, &o.Now)
 	if err != nil {
 		return nil, err
 	}
@@ -224,6 +226,9 @@ type ClaimParams struct {
 	// Window, when non-zero, lets a finished operation's base start a new
 	// generation once the window has passed. Keyed operations use 0.
 	Window time.Duration
+	// ReconcileRef, for reconcilable tools, is the raw JSON value of the
+	// argument a reconciliation read looks up.
+	ReconcileRef json.RawMessage
 }
 
 // Claim records a new operation owned by p.Owner, or returns the existing
@@ -245,15 +250,19 @@ func (s *Store) Claim(ctx context.Context, p ClaimParams) (op *Operation, create
 			}
 		}
 		key := fmt.Sprintf("%s.%d", p.Base, generation)
+		var ref any
+		if len(p.ReconcileRef) > 0 {
+			ref = string(p.ReconcileRef)
+		}
 		op, created, err := s.one(ctx, `INSERT INTO tool_operations
 			(op_key, key_base, generation, key_source, principal, upstream, tool, policy,
-			 args_hash, state, owner, lease_until, last_instance)
+			 args_hash, state, owner, lease_until, last_instance, reconcile_ref)
 			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'claimed', $10,
-			        now() + $11::bigint * interval '1 millisecond', $10)
+			        now() + $11::bigint * interval '1 millisecond', $10, $12::jsonb)
 			ON CONFLICT DO NOTHING
 			RETURNING `+columns,
 			key, p.Base, generation, p.Source, p.Principal, p.Upstream, p.Tool, p.Policy,
-			p.ArgsHash, p.Owner, millis(p.Lease))
+			p.ArgsHash, p.Owner, millis(p.Lease), ref)
 		if err != nil {
 			return nil, false, err
 		}
@@ -509,6 +518,27 @@ func (s *Store) List(ctx context.Context, f ListFilter) ([]*Operation, error) {
 		WHERE (cardinality($1::text[]) = 0 OR state::text = ANY($1))
 		  AND ($2 = '' OR tool = $2)
 		ORDER BY updated_at DESC LIMIT $3`, states, f.Tool, f.Limit)
+	if err != nil {
+		return nil, fmt.Errorf("store: %w", err)
+	}
+	defer rows.Close()
+	var ops []*Operation
+	for rows.Next() {
+		op, err := scanOp(rows)
+		if err != nil {
+			return nil, fmt.Errorf("store: %w", err)
+		}
+		ops = append(ops, op)
+	}
+	return ops, rows.Err()
+}
+
+// Reconcilable returns unknown operations that carry a reconciliation
+// reference, least recently changed first.
+func (s *Store) Reconcilable(ctx context.Context, limit int) ([]*Operation, error) {
+	rows, err := s.pool.Query(ctx, `SELECT `+columns+` FROM tool_operations
+		WHERE state = 'unknown' AND reconcile_ref IS NOT NULL
+		ORDER BY updated_at LIMIT $1`, limit)
 	if err != nil {
 		return nil, fmt.Errorf("store: %w", err)
 	}

@@ -295,6 +295,22 @@ func TestPurgeKeepsTheKey(t *testing.T) {
 	}
 }
 
+func TestReconcilableQueue(t *testing.T) {
+	st := storetest.New(t)
+	p := params("op_rec", "a", time.Minute)
+	p.ReconcileRef = []byte(`"order-7"`)
+	op := claim(t, st, p)
+	plain := claim(t, st, params("op_plain", "a", time.Minute))
+	for _, o := range []*store.Operation{op, plain} {
+		st.Gate(ctx, o.Key, "a", o.Fence, time.Minute)
+		st.MarkUnknown(ctx, o.Key, "a", o.Fence, nil)
+	}
+	ops, err := st.Reconcilable(ctx, 10)
+	if err != nil || len(ops) != 1 || ops[0].Key != op.Key || string(ops[0].ReconcileRef) != `"order-7"` {
+		t.Fatalf("reconcilable: %+v %v", ops, err)
+	}
+}
+
 func TestList(t *testing.T) {
 	st := storetest.New(t)
 	a := claim(t, st, params("op_list_a", "a", time.Minute))
