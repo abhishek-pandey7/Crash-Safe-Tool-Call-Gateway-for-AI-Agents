@@ -2,7 +2,7 @@
 
 A Go gateway that stops retried or interrupted AI agent tool calls from repeating real-world actions, such as refunds, emails or new tickets.
 
-> **Status: crash and multi-instance milestones working.** The gateway runs end to end against Postgres and a fake tool server. Its tests kill gateway processes at every step and at random under load, and check each outcome against the tool's own ledger. Reconciliation, an operator command and published measurements are not done yet.
+> **Status: all four tool policies working.** The gateway runs end to end against Postgres and a fake tool server. Its tests kill gateway processes at every step and at random under load, and check each outcome against the tool's own ledger. Docker Compose, CI, published measurements and a check against a real MCP server are not done yet.
 
 ## The problem
 
@@ -46,12 +46,13 @@ Each test compares what actually happened (from the fake tool's own ledger) with
 | Streamed progress, client disconnects, multi round-trip requests, Tasks | Done for one instance |
 | `native_key` tools: key injection and safe resend | Done for one instance |
 | Go's HTTP client never resends a dispatched call | Done, verified that the test fails if the protection is removed |
-| Kill-point crash matrix: the gateway process killed at each of 7 steps, retried through a second instance | Done for `at_most_once` and `native_key`, `e2e/crash_test.go`. A planted resend bug fails every row it can reach |
+| Kill-point crash matrix: the gateway process killed at each of 7 steps, retried through a second instance | Done for all three effectful policies, `e2e/crash_test.go`. A planted resend bug fails every row it can reach. `reconcilable` and `native_key` end every row with exactly one effect |
 | Several instances: takeover, fencing of paused instances, racing duplicates | Done, `e2e/multi_test.go` |
 | Random kills under load (3 gateway processes, about 450 operations and 15 kills per seed) | Done. With seeds 1 to 3 there were no invariant violations, and 6 to 8% of `at_most_once` operations ended "unknown". Machine-dependent, not a published measurement |
-| `reconcilable` tools | Accepted in config but handled as `at_most_once` for now |
-| Operator command to resolve unknown outcomes | Store support only |
-| Docker Compose, CI, published measurements | Not yet |
+| `reconcilable` tools: a read settles unknown outcomes, inline, on retry and in the background | Done, `e2e/reconcile_test.go`. "Not found" is only trusted after `settle_after`, and a planted bug that trusts it early is caught |
+| Operator command, `gatewayctl` | Done: list, show (with audit trail), resolve with required evidence, sweep, purge |
+| Result retention and hash-only results | Done. Expired results keep their key, so the tool never re-runs |
+| Docker Compose with Toxiproxy, Postgres outage tests, CI, published measurements, real-server check | Not yet |
 
 ## Running it
 
@@ -64,6 +65,29 @@ GATEWAY_DATABASE_URL=postgres://... bin/gateway -config gateway.yaml
 Point MCP clients at the gateway instead of the server. `/-/healthz` and `/-/readyz` report liveness and database reachability.
 
 A caller can give an operation a stable identity in `_meta`, using `io.github.abhishek-pandey7/operationKey`, or `runId` plus `stepId` in the same namespace. Without one, identical calls are grouped only within `fallback_window`.
+
+### Reconcilable tools
+
+A `reconcilable` tool names a read-only tool that answers one question: did this call take effect? The read is called with the original call's `match_argument` value. It is trusted only when it returns a boolean in `structuredContent` (`found` by default).
+
+- **`true`** settles the operation as completed straight away.
+- **`false`** is trusted only after `settle_after` has passed since dispatch, because until then the original call could still be in flight. After that, a retry runs the call once.
+- **Anything else**, such as an error, a missing field or a non-boolean, leaves the outcome unknown. A failed lookup is never treated as proof that nothing happened.
+
+The read uses the `upstream_headers` credentials, never a caller's.
+
+`settle_after` assumes the gateway does not stay frozen mid-send for longer than that period. Its default is `upstream_timeout` plus `lease`.
+
+### Resolving unknown outcomes
+
+```sh
+gatewayctl list -state unknown
+gatewayctl show op_...
+gatewayctl resolve op_... -outcome completed -evidence "refund rf_9 visible in the provider dashboard"
+gatewayctl resolve op_... -outcome not_executed -evidence "no refund for order-1001 in the provider dashboard"
+```
+
+`resolve` only applies to unknown operations, or to dispatches whose owner has gone, and it requires evidence, which goes into the audit trail. After `completed`, retries are told that an operator confirmed the call. After `not_executed`, the next retry runs it.
 
 ## Testing
 
@@ -80,6 +104,8 @@ Tests that need Postgres are skipped when `GATEWAY_TEST_DATABASE_URL` is unset. 
 | Path | What it is |
 |---|---|
 | `cmd/gateway` | The gateway binary |
+| `cmd/gatewayctl` | The operator command |
+| `internal/operator` | Recording outcomes a person verified |
 | `internal/gateway` | Request routing, the `tools/call` pipeline, dispatch, responses |
 | `internal/store` | Postgres operation store and migrations |
 | `internal/mcp` | JSON-RPC, 2026-07-28 request headers, SSE |
