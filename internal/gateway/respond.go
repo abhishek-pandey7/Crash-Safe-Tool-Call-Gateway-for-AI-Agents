@@ -59,9 +59,14 @@ func (g *Gateway) replay(c *callCtx, op *store.Operation) {
 func (g *Gateway) respondUnknown(c *callCtx, op *store.Operation) {
 	text := fmt.Sprintf("Outcome unknown: %s was sent, but no result was received. It may or may not have happened. "+
 		"Do not retry; retrying this call returns this same message. Check the external system or ask a person.", c.params.Name)
-	if c.pol.Policy == config.NativeKey {
+	switch c.pol.Policy {
+	case config.NativeKey:
 		text = fmt.Sprintf("Outcome unknown: %s was sent, but no result was received. Retrying is safe: the gateway "+
 			"resends it with the same idempotency key, so it cannot take effect twice.", c.params.Name)
+	case config.Reconcilable:
+		text = fmt.Sprintf("Outcome unknown: %s was sent, but no result was received. The gateway is checking with %s "+
+			"and will settle the outcome. Retrying later is safe: it returns the confirmed result, and runs the call "+
+			"only if the check proves it did not happen.", c.params.Name, c.pol.Reconcile.Tool)
 	}
 	extra := map[string]any{}
 	if op != nil && op.DispatchedAt != nil {

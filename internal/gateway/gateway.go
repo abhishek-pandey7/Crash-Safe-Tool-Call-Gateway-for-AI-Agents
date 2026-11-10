@@ -71,8 +71,11 @@ type Gateway struct {
 	// dispatcher sends effectful calls. It never resends a request on its
 	// own; see newDispatchClient.
 	dispatcher *http.Client
-	proxy      *httputil.ReverseProxy
-	pending    chan pendingWrite
+	// reader sends read-only reconciliation lookups, which are safe to
+	// retry.
+	reader  *http.Client
+	proxy   *httputil.ReverseProxy
+	pending chan pendingWrite
 }
 
 // New builds a gateway.
@@ -95,6 +98,7 @@ func New(cfg *config.Config, st *store.Store, opts Options) (*Gateway, error) {
 		hooks:      opts.Hooks,
 		upstream:   u,
 		dispatcher: newDispatchClient(),
+		reader:     &http.Client{Timeout: 15 * time.Second},
 		pending:    make(chan pendingWrite, 1024),
 	}
 	g.proxy = &httputil.ReverseProxy{

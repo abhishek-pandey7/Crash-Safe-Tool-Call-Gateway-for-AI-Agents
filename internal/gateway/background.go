@@ -50,10 +50,14 @@ func (g *Gateway) Run(ctx context.Context) {
 	defer sweep.Stop()
 	purge := time.NewTicker(min(max(g.cfg.Retention/10, time.Second), time.Hour))
 	defer purge.Stop()
+	reconcile := time.NewTicker(g.cfg.ReconcileInterval)
+	defer reconcile.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return
+		case <-reconcile.C:
+			g.reconcileUnknown(ctx)
 		case <-sweep.C:
 			c, cancel := context.WithTimeout(ctx, 5*time.Second)
 			released, unknown, err := g.store.Sweep(c, g.instance)

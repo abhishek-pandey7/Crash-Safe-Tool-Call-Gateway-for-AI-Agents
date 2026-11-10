@@ -112,10 +112,15 @@ func (g *Gateway) run(c *callCtx) {
 	if c.id.Windowed() {
 		window = g.cfg.FallbackWindow
 	}
+	var ref json.RawMessage
+	if c.pol.Policy == config.Reconcilable && c.pol.Reconcile != nil {
+		ref = rawArgument(c.params.Arguments, c.pol.Reconcile.MatchArgument)
+	}
 	op, created, err := g.store.Claim(ctx, store.ClaimParams{
 		Base: c.id.Base, Source: string(c.id.Source), Principal: c.principal,
 		Upstream: g.cfg.Upstream, Tool: c.params.Name, Policy: string(c.pol.Policy),
 		ArgsHash: c.id.ArgsHash, Owner: g.instance, Lease: g.cfg.Lease, Window: window,
+		ReconcileRef: ref,
 	})
 	if err != nil {
 		g.respondStoreDown(c, err)
@@ -187,6 +192,10 @@ func (g *Gateway) step(c *callCtx, op *store.Operation) (*store.Operation, bool)
 	case store.Unknown:
 		if c.pol.Policy == config.NativeKey {
 			return g.redispatch(c, store.FromStale)
+		}
+		if settled, ok := g.reconcile(ctx, op, c.pol); ok {
+			// Completed is replayed; not executed runs once, now.
+			return settled, false
 		}
 		g.respondUnknown(c, op)
 		return nil, true
@@ -349,6 +358,15 @@ func (g *Gateway) settleFailedSend(c *callCtx, op *store.Operation, res dispatch
 	g.persist("unknown", op.Key, func(ctx context.Context) (bool, error) {
 		return g.store.MarkUnknown(ctx, op.Key, g.instance, op.Fence, detail)
 	})
+	if c.pol.Policy == config.Reconcilable {
+		// The effect may already be visible: check before answering.
+		if cur, err := g.store.Get(c.storeCtx(), op.Key); err == nil {
+			if settled, ok := g.reconcile(c.storeCtx(), cur, c.pol); ok && settled.State == store.Completed {
+				g.replay(c, settled)
+				return
+			}
+		}
+	}
 	op.State = store.Unknown
 	g.respondUnknown(c, op)
 }
