@@ -2,7 +2,7 @@
 
 A Go gateway that stops retried or interrupted AI agent tool calls from repeating real-world actions, such as refunds, emails or new tickets.
 
-> **Status: early, single-instance milestone working.** The gateway runs end to end against Postgres and a fake tool server, and its tests pass. Crash-kill tests, multi-instance tests and reconciliation are not done yet, so the guarantees below are still design targets until those tests exist.
+> **Status: crash and multi-instance milestones working.** The gateway runs end to end against Postgres and a fake tool server. Its tests kill gateway processes at every step and at random under load, and check each outcome against the tool's own ledger. Reconciliation, an operator command and published measurements are not done yet.
 
 ## The problem
 
@@ -46,8 +46,9 @@ Each test compares what actually happened (from the fake tool's own ledger) with
 | Streamed progress, client disconnects, multi round-trip requests, Tasks | Done for one instance |
 | `native_key` tools: key injection and safe resend | Done for one instance |
 | Go's HTTP client never resends a dispatched call | Done, verified that the test fails if the protection is removed |
-| Kill-point crash matrix | Kill points are in the code; the harness is not written yet |
-| Several instances: takeover, racing duplicates, paused instances | Not yet |
+| Kill-point crash matrix: the gateway process killed at each of 7 steps, retried through a second instance | Done for `at_most_once` and `native_key`, `e2e/crash_test.go`. A planted resend bug fails every row it can reach |
+| Several instances: takeover, fencing of paused instances, racing duplicates | Done, `e2e/multi_test.go` |
+| Random kills under load (3 gateway processes, about 450 operations and 15 kills per seed) | Done. With seeds 1 to 3 there were no invariant violations, and 6 to 8% of `at_most_once` operations ended "unknown". Machine-dependent, not a published measurement |
 | `reconcilable` tools | Accepted in config but handled as `at_most_once` for now |
 | Operator command to resolve unknown outcomes | Store support only |
 | Docker Compose, CI, published measurements | Not yet |
@@ -72,7 +73,7 @@ export GATEWAY_TEST_DATABASE_URL=...   # printed by the script
 go test ./...
 ```
 
-Tests that need Postgres are skipped when `GATEWAY_TEST_DATABASE_URL` is unset. Each test gets its own schema.
+Tests that need Postgres are skipped when `GATEWAY_TEST_DATABASE_URL` is unset. Each test gets its own schema. The crash tests build the gateway with `-tags killpoints` and run it as separate processes. `GATEWAY_CHAOS_SEEDS=1,2,3,4,5` runs the random-kill test with more seeds, and `-short` skips it.
 
 ## Layout
 
