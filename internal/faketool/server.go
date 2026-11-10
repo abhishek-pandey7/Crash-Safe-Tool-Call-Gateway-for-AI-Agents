@@ -31,6 +31,9 @@ type Fault struct {
 	// DropResponse performs the effect, then closes the connection
 	// without sending a response: the lost-response case.
 	DropResponse bool `json:"dropResponse,omitempty"`
+	// DropBeforeEffect closes the connection without an effect or a
+	// response: the call arrived but never ran.
+	DropBeforeEffect bool `json:"dropBeforeEffect,omitempty"`
 	// DelayBeforeMs waits before the effect. A client disconnect during
 	// the wait cancels the call unless IgnoreCancel is set.
 	DelayBeforeMs int `json:"delayBeforeMs,omitempty"`
@@ -263,19 +266,19 @@ func (s *Server) callTool(w http.ResponseWriter, r *http.Request, msg *mcp.Messa
 		}
 	}
 
+	if fault.DropBeforeEffect {
+		dropConnection(w)
+		return
+	}
+
 	result := tool.run(s, c)
 
 	if fault.DelayAfterMs > 0 {
 		time.Sleep(time.Duration(fault.DelayAfterMs) * time.Millisecond)
 	}
 	if fault.DropResponse {
-		if hj, ok := w.(http.Hijacker); ok {
-			if conn, _, err := hj.Hijack(); err == nil {
-				_ = conn.Close()
-				return
-			}
-		}
-		panic(http.ErrAbortHandler)
+		dropConnection(w)
+		return
 	}
 
 	response := mcp.ResultResponse(msg.ID, result)
@@ -298,6 +301,17 @@ func (s *Server) callTool(w http.ResponseWriter, r *http.Request, msg *mcp.Messa
 		time.Sleep(10 * time.Millisecond)
 	}
 	_ = mcp.WriteSSE(w, response)
+}
+
+// dropConnection closes the client connection without sending a response.
+func dropConnection(w http.ResponseWriter) {
+	if hj, ok := w.(http.Hijacker); ok {
+		if conn, _, err := hj.Hijack(); err == nil {
+			_ = conn.Close()
+			return
+		}
+	}
+	panic(http.ErrAbortHandler)
 }
 
 func (s *Server) getTask(w http.ResponseWriter, msg *mcp.Message) {
