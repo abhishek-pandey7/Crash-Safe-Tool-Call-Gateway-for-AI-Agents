@@ -91,16 +91,6 @@ type procOptions struct {
 	killAt   string
 }
 
-func freePort(t *testing.T) int {
-	t.Helper()
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer ln.Close()
-	return ln.Addr().(*net.TCPAddr).Port
-}
-
 // processDB returns a fresh schema URL with a small connection pool, so
 // many gateway processes fit within Postgres's connection limit.
 func processDB(t *testing.T) string {
@@ -128,7 +118,22 @@ func writeConfig(t *testing.T, upstream, extra string) string {
 // startGateway runs a gateway process and waits until it is ready.
 func startGateway(t *testing.T, cfgPath, dbURL string, o procOptions) *proc {
 	t.Helper()
-	port := strconv.Itoa(freePort(t))
+	p, err := startGatewayE(t, cfgPath, dbURL, o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+// startGatewayE is startGateway for goroutines other than the test's own,
+// which must not call t.Fatal.
+func startGatewayE(t *testing.T, cfgPath, dbURL string, o procOptions) (*proc, error) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return nil, err
+	}
+	port := strconv.Itoa(ln.Addr().(*net.TCPAddr).Port)
+	ln.Close()
 	p := &proc{
 		name:   o.instance,
 		base:   "http://127.0.0.1:" + port,
@@ -145,7 +150,7 @@ func startGateway(t *testing.T, cfgPath, dbURL string, o procOptions) *proc {
 	)
 	p.cmd.Stdout, p.cmd.Stderr = p.logs, p.logs
 	if err := p.cmd.Start(); err != nil {
-		t.Fatal(err)
+		return nil, err
 	}
 	go func() {
 		_ = p.cmd.Wait()
@@ -162,7 +167,7 @@ func startGateway(t *testing.T, cfgPath, dbURL string, o procOptions) *proc {
 	for time.Now().Before(deadline) {
 		select {
 		case <-p.exited:
-			t.Fatalf("gateway %s exited during startup:\n%s", p.name, p.logs.String())
+			return nil, fmt.Errorf("gateway %s exited during startup:\n%s", p.name, p.logs.String())
 		default:
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
@@ -172,13 +177,12 @@ func startGateway(t *testing.T, cfgPath, dbURL string, o procOptions) *proc {
 		if err == nil {
 			resp.Body.Close()
 			if resp.StatusCode == http.StatusOK {
-				return p
+				return p, nil
 			}
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
-	t.Fatalf("gateway %s not ready:\n%s", p.name, p.logs.String())
-	return nil
+	return nil, fmt.Errorf("gateway %s not ready:\n%s", p.name, p.logs.String())
 }
 
 // kill stops the process abruptly, like SIGKILL.
@@ -199,14 +203,5 @@ func (p *proc) waitExit(d time.Duration) bool {
 		return true
 	case <-time.After(d):
 		return false
-	}
-}
-
-func (p *proc) running() bool {
-	select {
-	case <-p.exited:
-		return false
-	default:
-		return true
 	}
 }
