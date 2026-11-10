@@ -49,21 +49,32 @@ type Fault struct {
 type Server struct {
 	Ledger Ledger
 
-	mu       sync.Mutex
-	faults   []Fault
-	requests map[string]int
-	charges  map[string]json.RawMessage
-	tasks    map[string]json.RawMessage
-	nextTask int
+	mu          sync.Mutex
+	faults      []Fault
+	requests    map[string]int
+	refRequests map[string]int
+	charges     map[string]json.RawMessage
+	tasks       map[string]json.RawMessage
+	nextTask    int
 }
 
 // New returns a fake server with an empty ledger.
 func New() *Server {
 	return &Server{
-		requests: map[string]int{},
-		charges:  map[string]json.RawMessage{},
-		tasks:    map[string]json.RawMessage{},
+		requests:    map[string]int{},
+		refRequests: map[string]int{},
+		charges:     map[string]json.RawMessage{},
+		tasks:       map[string]json.RawMessage{},
 	}
+}
+
+// RequestsForReference returns how many tools/call requests carrying the
+// argument reference=ref reached the server. Each one is a dispatch, so for
+// an at_most_once tool it must never exceed one per operation.
+func (s *Server) RequestsForReference(ref string) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.refRequests[ref]
 }
 
 // AddFault queues a fault.
@@ -228,6 +239,9 @@ func (s *Server) callTool(w http.ResponseWriter, r *http.Request, msg *mcp.Messa
 
 	s.mu.Lock()
 	s.requests[p.Name]++
+	if ref := c.str("reference"); ref != "" {
+		s.refRequests[ref]++
+	}
 	s.mu.Unlock()
 
 	tool, ok := tools[p.Name]
