@@ -68,6 +68,9 @@ type Config struct {
 	MaxResultBytes int `yaml:"max_result_bytes"`
 	// UnknownTools is at_most_once (the default) or refuse.
 	UnknownTools string `yaml:"unknown_tools"`
+	// ReconcileInterval is how often unknown outcomes of reconcilable
+	// tools are checked in the background.
+	ReconcileInterval time.Duration `yaml:"reconcile_interval"`
 
 	Auth            Auth              `yaml:"auth"`
 	UpstreamHeaders map[string]string `yaml:"upstream_headers"`
@@ -131,6 +134,7 @@ const (
 	DefaultMaxResultBytes  = 1 << 20
 	DefaultMaxResends      = 2
 	DefaultFoundField      = "found"
+	DefaultReconcileEvery  = 10 * time.Second
 )
 
 // Load reads and validates a config file.
@@ -183,6 +187,9 @@ func (c *Config) applyDefaults() {
 	if c.UnknownTools == "" {
 		c.UnknownTools = UnknownToolsAtMostOnce
 	}
+	if c.ReconcileInterval == 0 {
+		c.ReconcileInterval = DefaultReconcileEvery
+	}
 	for name, t := range c.Tools {
 		if t.Policy == "" {
 			t.Policy = AtMostOnce
@@ -219,7 +226,7 @@ func (c *Config) Validate() error {
 	if c.Lease < time.Second/10 {
 		errs = append(errs, errors.New("lease must be at least 100ms"))
 	}
-	if c.WaitTimeout < 0 || c.UpstreamTimeout < 0 || c.FallbackWindow < 0 || c.Retention < 0 {
+	if c.WaitTimeout < 0 || c.UpstreamTimeout < 0 || c.FallbackWindow < 0 || c.Retention < 0 || c.ReconcileInterval < 0 {
 		errs = append(errs, errors.New("durations must not be negative"))
 	}
 	if c.UnknownTools != UnknownToolsAtMostOnce && c.UnknownTools != UnknownToolsRefuse {
