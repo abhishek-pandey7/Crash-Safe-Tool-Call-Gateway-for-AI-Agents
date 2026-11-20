@@ -2,7 +2,7 @@
 
 A Go gateway that stops retried or interrupted AI agent tool calls from repeating real-world actions, such as refunds, emails or new tickets.
 
-> **Status: all four tool policies working.** The gateway runs end to end against Postgres and a fake tool server. Its tests kill gateway processes at every step and at random under load, and check each outcome against the tool's own ledger. Postgres outages are tested too, the gateway exports Prometheus metrics, CI runs everything with the race detector, and a Docker Compose demo shows the main cases against a live stack. Published measurements and a check against a real MCP server are not done yet.
+> **Status: all four tool policies working.** The gateway runs end to end against Postgres and a fake tool server. Its tests kill gateway processes at every step and at random under load, and check each outcome against the tool's own ledger. Postgres outages are tested too, the gateway exports Prometheus metrics, CI runs everything with the race detector, and a Docker Compose demo shows the main cases against a live stack. It has also been checked between the official MCP Go SDK's client and server. Published measurements are not done yet.
 
 ## The problem
 
@@ -56,7 +56,8 @@ Each test compares what actually happened (from the fake tool's own ledger) with
 | Prometheus metrics at `/-/metrics` | Done, `e2e/metrics_test.go`. Tool labels are limited to configured tools, so callers cannot create unbounded series |
 | CI on GitHub Actions | Done, `.github/workflows/ci.yml`: gofmt, vet, build and the full suite with the race detector against Postgres on every push. On `main`, the random-kill test also runs with five seeds |
 | Docker Compose demo with Toxiproxy | Done, `compose.yaml` and `scripts/demo.sh`. CI builds the images, starts the stack and runs the demo, which fails if any effect count is wrong |
-| Published measurements, real-server check | Not yet |
+| Interop with the official MCP Go SDK (v1.8.0) on both sides | Done, `interop/`: tools/list, calls, replays, "outcome unknown" and reconciliation, with SSE and JSON responses, on protocol 2026-07-28. A baseline without the gateway shows the SDK client does not retry by itself, and an application retry after a lost response refunds twice |
+| Published measurements | Not yet |
 
 ## Trying it with Docker
 
@@ -136,7 +137,7 @@ export GATEWAY_TEST_DATABASE_URL=...   # printed by the script
 go test ./...
 ```
 
-CI runs the same suite with `-race` on Linux. Tests that need Postgres are skipped when `GATEWAY_TEST_DATABASE_URL` is unset. Each test gets its own schema. The crash tests build the gateway with `-tags killpoints` and run it as separate processes. `GATEWAY_CHAOS_SEEDS=1,2,3,4,5` runs the random-kill test with more seeds, and `-short` skips it.
+CI runs the same suite with `-race` on Linux, plus `cd interop && go test ./...` for the official SDK checks. Tests that need Postgres are skipped when `GATEWAY_TEST_DATABASE_URL` is unset. Each test gets its own schema. The crash tests build the gateway with `-tags killpoints` and run it as separate processes. `GATEWAY_CHAOS_SEEDS=1,2,3,4,5` runs the random-kill test with more seeds, and `-short` skips it.
 
 ## Layout
 
@@ -157,3 +158,4 @@ CI runs the same suite with `-race` on Linux. Tests that need Postgres are skipp
 | `internal/faultproxy` | TCP proxy that cuts or stalls Postgres during tests |
 | `internal/metrics` | Small Prometheus text exporter |
 | `e2e` | End-to-end tests against the ledger |
+| `interop` | The gateway between the official MCP Go SDK's client and server; a separate module |
