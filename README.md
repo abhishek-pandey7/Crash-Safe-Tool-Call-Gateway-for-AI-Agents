@@ -2,7 +2,7 @@
 
 A Go gateway that stops retried or interrupted AI agent tool calls from repeating real-world actions, such as refunds, emails or new tickets.
 
-> **Status: working end to end.** All four tool policies work. The tests kill gateway processes at every step and at random under load, cut Postgres off, and check every outcome against the tool's own ledger. CI runs them with the race detector, a Docker Compose demo runs against a live stack, the gateway works between the official MCP Go SDK's client and server, and [measurements](#measurements) are published. Comparisons with similar tools are not done yet.
+> **Status: working end to end.** All four tool policies work. The tests kill gateway processes at every step and at random under load, cut Postgres off, and check every outcome against the tool's own ledger. CI runs them with the race detector, a Docker Compose demo runs against a live stack, the gateway works between the official MCP Go SDK's client and server, [measurements](#measurements) are published, and it has been [compared with similar tools](#comparison-with-similar-tools).
 
 ## The problem
 
@@ -58,6 +58,7 @@ Each test compares what actually happened (from the fake tool's own ledger) with
 | Docker Compose demo with Toxiproxy | Done, `compose.yaml` and `scripts/demo.sh`. CI builds the images, starts the stack and runs the demo, which fails if any effect count is wrong |
 | Interop with the official MCP Go SDK (v1.8.0) on both sides | Done, `interop/`: tools/list, calls, replays, "outcome unknown" and reconciliation, with SSE and JSON responses, on protocol 2026-07-28. A baseline without the gateway shows the SDK client does not retry by itself, and an application retry after a lost response refunds twice |
 | Published measurements | Done, `cmd/measure`; see [Measurements](#measurements) |
+| Comparison with similar tools | Done, `compare/`; see [Comparison with similar tools](#comparison-with-similar-tools) |
 
 ## Trying it with Docker
 
@@ -112,6 +113,27 @@ docker run --rm --network container:crashsafe-pg -v "$PWD:/src" -w /src golang:1
 ```
 
 On Linux, `go run ./cmd/measure -db "$GATEWAY_TEST_DATABASE_URL"` works directly. On Windows, run it in a Linux container as above: Go's clock there moves in steps of roughly 0.3 to 1 ms, which turns sub-millisecond times into zeros. Raw results go to `results/measurements.json`.
+
+## Comparison with similar tools
+
+The same three failures, through mcp-idempotent, once-gate, agentsafe-mcp and this gateway. Refunds are counted by the fake tool's own ledger.
+
+| Layer | Tool dies before answering | Layer killed before answering | Agent times out and retries |
+|---|---|---|---|
+| None | **2** | n/a | **2** |
+| mcp-idempotent, memory store (its default) | **2** | **2** | 1 |
+| mcp-idempotent, Redis store | 1 | 1 | 1 |
+| once-gate 0.2.1 | 1 | 1 | 1 |
+| agentsafe-mcp v0.6.0 | 1 | 1 | 1 |
+| This gateway, `at_most_once` | 1 | 1 | 1 |
+| This gateway, `reconcilable` | 1 | 1 | 1 |
+
+Apart from mcp-idempotent's default memory store, every layer prevented the duplicates. They differ in what the agent is told:
+- **once-gate and agentsafe-mcp:** a person has to settle the uncertain cases.
+- **mcp-idempotent's Redis store:** the agent can be left with no answer, or a timeout error.
+- **This gateway:** it says "outcome unknown", or with a `reconcilable` tool it confirms the result through a lookup without a person.
+
+The others are single-process stdio proxies, with strengths these scenarios don't test, such as per-call approvals. [`compare/README.md`](compare/README.md) has the full answers, versions, configurations, limitations and the command to rerun it.
 
 ## Running it
 
@@ -195,3 +217,4 @@ CI runs the same suite with `-race` on Linux, plus `cd interop && go test ./...`
 | `internal/metrics` | Small Prometheus text exporter |
 | `e2e` | End-to-end tests against the ledger |
 | `interop` | The gateway between the official MCP Go SDK's client and server; a separate module |
+| `compare` | The comparison with similar tools; a separate module, run in its own Docker image |
