@@ -2,7 +2,7 @@
 
 A Go gateway that stops retried or interrupted AI agent tool calls from repeating real-world actions, such as refunds, emails or new tickets.
 
-> **Status: all four tool policies working.** The gateway runs end to end against Postgres and a fake tool server. Its tests kill gateway processes at every step and at random under load, and check each outcome against the tool's own ledger. Postgres outages are tested too, the gateway exports Prometheus metrics, CI runs everything with the race detector, and a Docker Compose demo shows the main cases against a live stack. It has also been checked between the official MCP Go SDK's client and server. Published measurements are not done yet.
+> **Status: working end to end.** All four tool policies work. The tests kill gateway processes at every step and at random under load, cut Postgres off, and check every outcome against the tool's own ledger. CI runs them with the race detector, a Docker Compose demo runs against a live stack, the gateway works between the official MCP Go SDK's client and server, and [measurements](#measurements) are published. Comparisons with similar tools are not done yet.
 
 ## The problem
 
@@ -57,7 +57,7 @@ Each test compares what actually happened (from the fake tool's own ledger) with
 | CI on GitHub Actions | Done, `.github/workflows/ci.yml`: gofmt, vet, build and the full suite with the race detector against Postgres on every push. On `main`, the random-kill test also runs with five seeds |
 | Docker Compose demo with Toxiproxy | Done, `compose.yaml` and `scripts/demo.sh`. CI builds the images, starts the stack and runs the demo, which fails if any effect count is wrong |
 | Interop with the official MCP Go SDK (v1.8.0) on both sides | Done, `interop/`: tools/list, calls, replays, "outcome unknown" and reconciliation, with SSE and JSON responses, on protocol 2026-07-28. A baseline without the gateway shows the SDK client does not retry by itself, and an application retry after a lost response refunds twice |
-| Published measurements | Not yet |
+| Published measurements | Done, `cmd/measure`; see [Measurements](#measurements) |
 
 ## Trying it with Docker
 
@@ -77,6 +77,41 @@ The stack runs two gateway instances sharing one Postgres, in front of a fake to
 | Postgres cut off, then restored | Nothing is sent while it is down; the retry runs once | 0, then 1 |
 
 Host ports default to 8080 and 8081 (gateways), 8090 (fake tool server) and 8474 (Toxiproxy), all on 127.0.0.1. If one is taken, set `GATEWAY_A_PORT`, `GATEWAY_B_PORT`, `FAKETOOL_PORT` or `TOXIPROXY_PORT` for both `docker compose` and the demo. `docker compose --profile metrics up -d` adds Prometheus on port 9090.
+
+## Measurements
+
+Lost responses on 10% of first attempts, 1,000 operations per row, 16 concurrent callers. The direct caller retries after a dropped connection, the way an agent does. Callers through the gateway also retry whenever the gateway says retrying is safe. The tool's ledger counts what really happened.
+
+| Path | Policy | Lost responses | Duplicate effects | Told "unknown" | Told it ran | Wrong answers |
+|---|---|---|---|---|---|---|
+| Direct, agent retries | none | 105 | **105** | 0 | 1,000 | 0 |
+| Through the gateway | `at_most_once` | 105 | **0** | 105 | 895 | 0 |
+| Through the gateway | `reconcilable` | 105 | **0** | 0 | 1,000 | 0 |
+| Through the gateway | `native_key` | 105 | **0** | 0 | 1,000 | 0 |
+
+Every lost response became a duplicate without the gateway, and none did with it. A "wrong answer" would be a caller told a call ran when it had no effect, or the reverse. For `at_most_once` tools, each lost response becomes "unknown", because nothing can tell those calls apart from calls that never ran.
+
+Latency and throughput, with no faults and a new operation on every call:
+
+| Path | Concurrent callers | p50 | p99 | Calls per second |
+|---|---|---|---|---|
+| One Postgres commit, for reference | 1 | 2.17 ms | 4.63 ms | 438 |
+| Direct to the tool | 1 | 0.26 ms | 1.27 ms | 2,899 |
+| Direct to the tool | 16 | 1.36 ms | 6.58 ms | 9,046 |
+| Through the gateway | 1 | 7.65 ms | 21.77 ms | 110 |
+| Through the gateway | 16 | 9.40 ms | 38.87 ms | 1,539 |
+
+The gateway adds about 7.4 ms at p50 with one caller, close to three Postgres commits: the claim, the dispatch gate and the outcome are each written durably before the next step. That is the price of surviving a crash at any point. It is small next to a model call or most real tools, but it is not free.
+
+These numbers come from one machine: Docker Desktop (WSL2) on Windows 11 with 16 CPUs, Go 1.27.4 and Postgres 17.11 in Docker with default durability settings, measured on 20 November 2026. They are not a benchmark of anything else. To reproduce them:
+
+```sh
+./scripts/test-db.sh   # Postgres in Docker, as for the tests
+docker run --rm --network container:crashsafe-pg -v "$PWD:/src" -w /src golang:1.27 \
+  go run ./cmd/measure -db "postgres://postgres:postgres@127.0.0.1:5432/gateway?sslmode=disable"
+```
+
+On Linux, `go run ./cmd/measure -db "$GATEWAY_TEST_DATABASE_URL"` works directly. On Windows, run it in a Linux container as above: Go's clock there moves in steps of roughly 0.3 to 1 ms, which turns sub-millisecond times into zeros. Raw results go to `results/measurements.json`.
 
 ## Running it
 
@@ -145,6 +180,7 @@ CI runs the same suite with `-race` on Linux, plus `cd interop && go test ./...`
 |---|---|
 | `cmd/gateway` | The gateway binary |
 | `cmd/gatewayctl` | The operator command |
+| `cmd/measure` | The measurements above |
 | `cmd/faketool`, `cmd/mcpcall` | The fake tool server on its own, and a command-line MCP client, for the demo |
 | `compose.yaml`, `deploy/` | The Docker Compose demo stack and its configs |
 | `internal/operator` | Recording outcomes a person verified |
