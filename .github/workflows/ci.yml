@@ -63,6 +63,12 @@ jobs:
           go vet ./...
           go test -race -count=1 -timeout 10m ./...
 
+      # The comparison with other tools runs in its own Docker image (see
+      # compare/README.md); CI only checks that the harness still builds.
+      - name: vet the comparison harness
+        working-directory: compare
+        run: go vet ./...
+
   chaos:
     # Random kills under load with more seeds. Slower, so only on main and
     # on request.
