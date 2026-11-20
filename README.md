@@ -2,7 +2,7 @@
 
 A Go gateway that stops retried or interrupted AI agent tool calls from repeating real-world actions, such as refunds, emails or new tickets.
 
-> **Status: all four tool policies working.** The gateway runs end to end against Postgres and a fake tool server. Its tests kill gateway processes at every step and at random under load, and check each outcome against the tool's own ledger. Docker Compose, CI, published measurements and a check against a real MCP server are not done yet.
+> **Status: all four tool policies working.** The gateway runs end to end against Postgres and a fake tool server. Its tests kill gateway processes at every step and at random under load, and check each outcome against the tool's own ledger. Postgres outages are tested too. Docker Compose, CI, published measurements and a check against a real MCP server are not done yet.
 
 ## The problem
 
@@ -52,7 +52,8 @@ Each test compares what actually happened (from the fake tool's own ledger) with
 | `reconcilable` tools: a read settles unknown outcomes, inline, on retry and in the background | Done, `e2e/reconcile_test.go`. "Not found" is only trusted after `settle_after`, and a planted bug that trusts it early is caught |
 | Operator command, `gatewayctl` | Done: list, show (with audit trail), resolve with required evidence, sweep, purge |
 | Result retention and hash-only results | Done. Expired results keep their key, so the tool never re-runs |
-| Docker Compose with Toxiproxy, Postgres outage tests, CI, published measurements, real-server check | Not yet |
+| Postgres outages: refused connections and partitions, before and during a call, and a crash while Postgres is down | Done, `e2e/outage_test.go`. Calls are refused before anything is sent, read-only tools keep working, and a lost write catches up when Postgres returns. Without a statement timeout a partitioned database hung callers; `store_timeout` now bounds every statement |
+| Docker Compose with Toxiproxy, CI, published measurements, real-server check | Not yet |
 
 ## Running it
 
@@ -113,4 +114,5 @@ Tests that need Postgres are skipped when `GATEWAY_TEST_DATABASE_URL` is unset. 
 | `internal/config` | YAML config and tool policies |
 | `internal/faketool` | Fake MCP server with an effect ledger and fault injection |
 | `internal/killpoint` | Kill points, compiled in only with `-tags killpoints` |
+| `internal/faultproxy` | TCP proxy that cuts or stalls Postgres during tests |
 | `e2e` | End-to-end tests against the ledger |
