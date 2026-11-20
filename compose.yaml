@@ -1,0 +1,89 @@
+# Two gateway instances in front of the fake tool server, sharing one
+# Postgres. Toxiproxy sits on both the gateways' database connection and
+# their upstream connection, so the demo can cut either one.
+#
+#   docker compose up -d --build
+#   ./scripts/demo.sh
+#   docker compose --profile metrics up -d   # adds Prometheus on :9090
+#
+# Every port is bound to 127.0.0.1, and each can be moved with an
+# environment variable if it is taken: GATEWAY_A_PORT (8080), GATEWAY_B_PORT
+# (8081), FAKETOOL_PORT (8090), TOXIPROXY_PORT (8474), PROMETHEUS_PORT (9090).
+# The faketool and Toxiproxy control endpoints have no authentication and
+# are for local use only.
+
+name: crashsafe
+
+x-gateway: &gateway
+  build:
+    context: .
+    target: gateway
+  image: crashsafe-gateway
+  command: ["-config", "/config/gateway.yaml"]
+  volumes:
+    - ./deploy/gateway.yaml:/config/gateway.yaml:ro
+  depends_on:
+    postgres:
+      condition: service_healthy
+    toxiproxy:
+      condition: service_started
+    faketool:
+      condition: service_started
+  restart: unless-stopped
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: gateway
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
+  toxiproxy:
+    image: ghcr.io/shopify/toxiproxy:2.13.0
+    command: ["-host=0.0.0.0", "-config=/config/toxiproxy.json"]
+    volumes:
+      - ./deploy/toxiproxy.json:/config/toxiproxy.json:ro
+    ports:
+      - "127.0.0.1:${TOXIPROXY_PORT:-8474}:8474" # control API
+
+  faketool:
+    build:
+      context: .
+      target: faketool
+    image: crashsafe-faketool
+    ports:
+      - "127.0.0.1:${FAKETOOL_PORT:-8090}:8080" # /mcp, /ledger, /faults, /requests
+
+  gateway-a:
+    <<: *gateway
+    environment:
+      GATEWAY_DATABASE_URL: postgres://postgres:postgres@toxiproxy:15432/gateway?sslmode=disable
+      GATEWAY_INSTANCE_ID: gateway-a
+    ports:
+      - "127.0.0.1:${GATEWAY_A_PORT:-8080}:8080"
+
+  gateway-b:
+    <<: *gateway
+    environment:
+      GATEWAY_DATABASE_URL: postgres://postgres:postgres@toxiproxy:15432/gateway?sslmode=disable
+      GATEWAY_INSTANCE_ID: gateway-b
+    ports:
+      - "127.0.0.1:${GATEWAY_B_PORT:-8081}:8080"
+
+  prometheus:
+    profiles: ["metrics"]
+    image: prom/prometheus:v3.8.0
+    volumes:
+      - ./deploy/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports:
+      - "127.0.0.1:${PROMETHEUS_PORT:-9090}:9090"
+
+volumes:
+  pgdata:

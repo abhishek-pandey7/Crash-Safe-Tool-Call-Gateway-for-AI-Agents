@@ -1,0 +1,14 @@
+[
+  {
+    "name": "postgres",
+    "listen": "0.0.0.0:15432",
+    "upstream": "postgres:5432",
+    "enabled": true
+  },
+  {
+    "name": "tool",
+    "listen": "0.0.0.0:18080",
+    "upstream": "faketool:8080",
+    "enabled": true
+  }
+]

@@ -1,0 +1,36 @@
+# Gateway config for the Docker Compose demo. The upstream and the database
+# both go through Toxiproxy, so the demo can cut either connection.
+
+listen: ":8080"
+upstream: http://toxiproxy:18080/mcp
+
+lease: 5s
+wait_timeout: 5s
+upstream_timeout: 15s
+fallback_window: 60s
+store_timeout: 2s
+reconcile_interval: 2s
+
+tools:
+  get_invoice:
+    policy: read_only
+
+  find_refund_by_reference:
+    policy: read_only
+
+  # No way to check or deduplicate: a lost response becomes "outcome unknown".
+  send_email:
+    policy: at_most_once
+
+  # A read confirms whether a refund happened, so lost responses settle.
+  create_refund:
+    policy: reconcilable
+    require_key: true
+    reconcile:
+      tool: find_refund_by_reference
+      match_argument: reference
+
+  # Accepts an idempotency key, so resending is safe.
+  create_charge:
+    policy: native_key
+    key_argument: idempotency_key
