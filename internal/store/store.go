@@ -588,6 +588,29 @@ func (s *Store) Reconcilable(ctx context.Context, limit int) ([]*Operation, erro
 	return ops, rows.Err()
 }
 
+// CountOpen counts unfinished operations by state.
+func (s *Store) CountOpen(ctx context.Context) (map[State]int64, error) {
+	ctx, cancel := s.bound(ctx)
+	defer cancel()
+	rows, err := s.pool.Query(ctx, `SELECT state::text, count(*) FROM tool_operations
+		WHERE state IN ('claimed', 'dispatching', 'awaiting_input', 'unknown')
+		GROUP BY state`)
+	if err != nil {
+		return nil, fmt.Errorf("store: %w", err)
+	}
+	defer rows.Close()
+	counts := map[State]int64{}
+	for rows.Next() {
+		var st string
+		var n int64
+		if err := rows.Scan(&st, &n); err != nil {
+			return nil, fmt.Errorf("store: %w", err)
+		}
+		counts[State(st)] = n
+	}
+	return counts, rows.Err()
+}
+
 // Event is one entry of an operation's audit trail.
 type Event struct {
 	ID       int64
