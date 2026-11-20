@@ -3,6 +3,7 @@ package e2e
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -12,6 +13,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -125,9 +127,25 @@ func startGateway(t *testing.T, cfgPath, dbURL string, o procOptions) *proc {
 	return p
 }
 
+// errPortTaken means another process took the chosen port between choosing
+// it and the gateway binding it.
+var errPortTaken = errors.New("port taken before the gateway could bind it")
+
 // startGatewayE is startGateway for goroutines other than the test's own,
-// which must not call t.Fatal.
+// which must not call t.Fatal. A free port is found by binding and
+// releasing it, so another process can take it before the gateway starts;
+// in that case it tries again with a new port.
 func startGatewayE(t *testing.T, cfgPath, dbURL string, o procOptions) (*proc, error) {
+	for range 5 {
+		p, err := tryStartGateway(t, cfgPath, dbURL, o)
+		if !errors.Is(err, errPortTaken) {
+			return p, err
+		}
+	}
+	return nil, fmt.Errorf("gateway %s: %w, five times", o.instance, errPortTaken)
+}
+
+func tryStartGateway(t *testing.T, cfgPath, dbURL string, o procOptions) (*proc, error) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		return nil, err
@@ -167,6 +185,10 @@ func startGatewayE(t *testing.T, cfgPath, dbURL string, o procOptions) (*proc, e
 	for time.Now().Before(deadline) {
 		select {
 		case <-p.exited:
+			if strings.Contains(p.logs.String(), "address already in use") ||
+				strings.Contains(p.logs.String(), "Only one usage of each socket address") {
+				return nil, errPortTaken
+			}
 			return nil, fmt.Errorf("gateway %s exited during startup:\n%s", p.name, p.logs.String())
 		default:
 		}
