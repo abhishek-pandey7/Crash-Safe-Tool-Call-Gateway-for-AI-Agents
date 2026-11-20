@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/url"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -235,6 +236,9 @@ func TestStoreOutageThenCrashIsUnknownNotResent(t *testing.T) {
 	db.Set(faultproxy.Down)
 	if code := readyz(g1); code != http.StatusServiceUnavailable {
 		t.Fatalf("readyz during the outage: %d", code)
+	}
+	if m := fetchMetrics(t, g1); !strings.Contains(m, "\ngateway_store_up 0\n") || strings.Contains(m, "gateway_operations{") {
+		t.Fatalf("metrics during the outage:\n%s", m)
 	}
 	waitFor(t, 10*time.Second, func() bool { return fake.Ledger.CountReference("order-1001") == 1 })
 	<-done
