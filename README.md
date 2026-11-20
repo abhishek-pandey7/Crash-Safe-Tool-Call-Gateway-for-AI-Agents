@@ -2,7 +2,7 @@
 
 A Go gateway that stops retried or interrupted AI agent tool calls from repeating real-world actions, such as refunds, emails or new tickets.
 
-> **Status: all four tool policies working.** The gateway runs end to end against Postgres and a fake tool server. Its tests kill gateway processes at every step and at random under load, and check each outcome against the tool's own ledger. Postgres outages are tested too. Docker Compose, CI, published measurements and a check against a real MCP server are not done yet.
+> **Status: all four tool policies working.** The gateway runs end to end against Postgres and a fake tool server. Its tests kill gateway processes at every step and at random under load, and check each outcome against the tool's own ledger. Postgres outages are tested too, and the gateway exports Prometheus metrics. Docker Compose, CI, published measurements and a check against a real MCP server are not done yet.
 
 ## The problem
 
@@ -53,6 +53,7 @@ Each test compares what actually happened (from the fake tool's own ledger) with
 | Operator command, `gatewayctl` | Done: list, show (with audit trail), resolve with required evidence, sweep, purge |
 | Result retention and hash-only results | Done. Expired results keep their key, so the tool never re-runs |
 | Postgres outages: refused connections and partitions, before and during a call, and a crash while Postgres is down | Done, `e2e/outage_test.go`. Calls are refused before anything is sent, read-only tools keep working, and a lost write catches up when Postgres returns. Without a statement timeout a partitioned database hung callers; `store_timeout` now bounds every statement |
+| Prometheus metrics at `/-/metrics` | Done, `e2e/metrics_test.go`. Tool labels are limited to configured tools, so callers cannot create unbounded series |
 | Docker Compose with Toxiproxy, CI, published measurements, real-server check | Not yet |
 
 ## Running it
@@ -63,9 +64,25 @@ cp gateway.example.yaml gateway.yaml   # set upstream and tool policies
 GATEWAY_DATABASE_URL=postgres://... bin/gateway -config gateway.yaml
 ```
 
-Point MCP clients at the gateway instead of the server. `/-/healthz` and `/-/readyz` report liveness and database reachability.
+Point MCP clients at the gateway instead of the server. `/-/healthz` and `/-/readyz` report liveness and database reachability, and `/-/metrics` serves Prometheus metrics. These three endpoints need no credentials, so keep them off the public network.
 
 A caller can give an operation a stable identity in `_meta`, using `io.github.abhishek-pandey7/operationKey`, or `runId` plus `stepId` in the same namespace. Without one, identical calls are grouped only within `fallback_window`.
+
+### Metrics
+
+| Metric | What it shows |
+|---|---|
+| `gateway_tool_calls_total{tool,policy,outcome}` | How each `tools/call` was answered: `completed`, `replayed`, `outcome_unknown`, `in_progress`, `not_executed`, `store_unavailable`, `key_conflict`, `key_required`, `refused`, `invalid`, `read_only`, `input_required` or `client_left`. Tools missing from the config are counted as `_unlisted` |
+| `gateway_dispatches_total{policy,result}` | Sends upstream: `response`, `unsent` (provably never left) or `maybe_sent` (no answer, may have run) |
+| `gateway_dispatch_duration_seconds{policy}` | Upstream time per send |
+| `gateway_operations{state}` | Unfinished operations across all instances: `claimed`, `dispatching`, `awaiting_input`, `unknown` |
+| `gateway_store_up` | Whether Postgres answered a ping at scrape time |
+| `gateway_store_errors_total{where}` | Failed store statements on the request path, in state writes and in background work |
+| `gateway_pending_writes`, `gateway_pending_writes_dropped_total`, `gateway_pending_writes_abandoned_total` | State changes waiting for Postgres to come back, and those given up |
+| `gateway_reconciliations_total{result}` | Reconciliation reads: `found`, `not_found_settled`, `not_found_too_early`, `inconclusive` |
+| `gateway_abandoned_operations_settled_total{to}` | Operations whose owner vanished, settled as `released` or `unknown` |
+
+A rising `gateway_operations{state="unknown"}` is the number to alert on: each one needs a reconciliation read or a person to settle it.
 
 ### Reconcilable tools
 
@@ -115,4 +132,5 @@ Tests that need Postgres are skipped when `GATEWAY_TEST_DATABASE_URL` is unset. 
 | `internal/faketool` | Fake MCP server with an effect ledger and fault injection |
 | `internal/killpoint` | Kill points, compiled in only with `-tags killpoints` |
 | `internal/faultproxy` | TCP proxy that cuts or stalls Postgres during tests |
+| `internal/metrics` | Small Prometheus text exporter |
 | `e2e` | End-to-end tests against the ledger |
