@@ -2,7 +2,7 @@
 
 A Go gateway that stops retried or interrupted AI agent tool calls from repeating real-world actions, such as refunds, emails or new tickets.
 
-> **Status: all four tool policies working.** The gateway runs end to end against Postgres and a fake tool server. Its tests kill gateway processes at every step and at random under load, and check each outcome against the tool's own ledger. Postgres outages are tested too, and the gateway exports Prometheus metrics. Docker Compose, CI, published measurements and a check against a real MCP server are not done yet.
+> **Status: all four tool policies working.** The gateway runs end to end against Postgres and a fake tool server. Its tests kill gateway processes at every step and at random under load, and check each outcome against the tool's own ledger. Postgres outages are tested too, the gateway exports Prometheus metrics, and CI runs everything with the race detector. Docker Compose, published measurements and a check against a real MCP server are not done yet.
 
 ## The problem
 
@@ -54,7 +54,8 @@ Each test compares what actually happened (from the fake tool's own ledger) with
 | Result retention and hash-only results | Done. Expired results keep their key, so the tool never re-runs |
 | Postgres outages: refused connections and partitions, before and during a call, and a crash while Postgres is down | Done, `e2e/outage_test.go`. Calls are refused before anything is sent, read-only tools keep working, and a lost write catches up when Postgres returns. Without a statement timeout a partitioned database hung callers; `store_timeout` now bounds every statement |
 | Prometheus metrics at `/-/metrics` | Done, `e2e/metrics_test.go`. Tool labels are limited to configured tools, so callers cannot create unbounded series |
-| Docker Compose with Toxiproxy, CI, published measurements, real-server check | Not yet |
+| CI on GitHub Actions | Done, `.github/workflows/ci.yml`: gofmt, vet, build and the full suite with the race detector against Postgres on every push. On `main`, the random-kill test also runs with five seeds |
+| Docker Compose with Toxiproxy, published measurements, real-server check | Not yet |
 
 ## Running it
 
@@ -115,7 +116,7 @@ export GATEWAY_TEST_DATABASE_URL=...   # printed by the script
 go test ./...
 ```
 
-Tests that need Postgres are skipped when `GATEWAY_TEST_DATABASE_URL` is unset. Each test gets its own schema. The crash tests build the gateway with `-tags killpoints` and run it as separate processes. `GATEWAY_CHAOS_SEEDS=1,2,3,4,5` runs the random-kill test with more seeds, and `-short` skips it.
+CI runs the same suite with `-race` on Linux. Tests that need Postgres are skipped when `GATEWAY_TEST_DATABASE_URL` is unset. Each test gets its own schema. The crash tests build the gateway with `-tags killpoints` and run it as separate processes. `GATEWAY_CHAOS_SEEDS=1,2,3,4,5` runs the random-kill test with more seeds, and `-short` skips it.
 
 ## Layout
 
