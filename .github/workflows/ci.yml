@@ -84,3 +84,28 @@ jobs:
           go-version-file: go.mod
       - name: random kills, five seeds
         run: go test -count=1 -timeout 25m -v -run TestRandomKillsUnderLoad ./e2e
+
+  compose:
+    # Builds the images, starts the Docker Compose stack and runs the demo,
+    # which fails if any effect count differs from what the gateway promises.
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: build and start the stack
+        run: docker compose up -d --build
+      - name: wait for both gateways
+        run: |
+          for i in $(seq 90); do
+            if curl -fsS http://127.0.0.1:8080/-/readyz && curl -fsS http://127.0.0.1:8081/-/readyz; then exit 0; fi
+            sleep 1
+          done
+          exit 1
+      - name: demo
+        run: sh scripts/demo.sh
+      - name: logs
+        if: failure()
+        run: docker compose logs --no-color
+      - name: stop
+        if: always()
+        run: docker compose down -v
