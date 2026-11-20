@@ -106,13 +106,31 @@ func (o *Operation) windowAnchor() time.Time {
 	}
 }
 
+// DefaultTimeout bounds each statement unless SetTimeout says otherwise.
+const DefaultTimeout = 5 * time.Second
+
 // Store is the Postgres-backed operation store.
 type Store struct {
-	pool *pgxpool.Pool
+	pool    *pgxpool.Pool
+	timeout time.Duration
 }
 
 // New wraps an existing pool.
-func New(pool *pgxpool.Pool) *Store { return &Store{pool: pool} }
+func New(pool *pgxpool.Pool) *Store { return &Store{pool: pool, timeout: DefaultTimeout} }
+
+// SetTimeout bounds each statement, so a database that stops answering
+// returns an error instead of hanging the caller. Zero means no bound
+// beyond the caller's own context.
+func (s *Store) SetTimeout(d time.Duration) { s.timeout = d }
+
+// bound applies the statement timeout. A caller's earlier deadline still
+// wins.
+func (s *Store) bound(ctx context.Context) (context.Context, context.CancelFunc) {
+	if s.timeout <= 0 {
+		return ctx, func() {}
+	}
+	return context.WithTimeout(ctx, s.timeout)
+}
 
 // Open connects to Postgres and applies migrations.
 func Open(ctx context.Context, url string) (*Store, error) {
@@ -133,7 +151,7 @@ func OpenConfig(ctx context.Context, cfg *pgxpool.Config) (*Store, error) {
 		pool.Close()
 		return nil, err
 	}
-	return &Store{pool: pool}, nil
+	return New(pool), nil
 }
 
 // Pool exposes the connection pool.
@@ -143,7 +161,11 @@ func (s *Store) Pool() *pgxpool.Pool { return s.pool }
 func (s *Store) Close() { s.pool.Close() }
 
 // Ping checks that the database is reachable.
-func (s *Store) Ping(ctx context.Context) error { return s.pool.Ping(ctx) }
+func (s *Store) Ping(ctx context.Context) error {
+	ctx, cancel := s.bound(ctx)
+	defer cancel()
+	return s.pool.Ping(ctx)
+}
 
 const columns = `op_key, key_base, generation, key_source, principal, upstream, tool, policy,
 	args_hash, state, owner, fence, lease_until, attempts, result_kind, result, result_hash,
@@ -176,6 +198,8 @@ func scanOp(row pgx.Row) (*Operation, error) {
 // one runs a statement returning at most one operation. A statement that
 // matched no row reports ok=false and no error.
 func (s *Store) one(ctx context.Context, sql string, args ...any) (*Operation, bool, error) {
+	ctx, cancel := s.bound(ctx)
+	defer cancel()
 	op, err := scanOp(s.pool.QueryRow(ctx, sql, args...))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, false, nil
@@ -344,6 +368,8 @@ func (s *Store) Redispatch(ctx context.Context, key, owner string, lease time.Du
 // Heartbeat extends the owner's lease. It returns false once the owner has
 // lost the operation.
 func (s *Store) Heartbeat(ctx context.Context, key, owner string, fence int64, lease time.Duration) (bool, error) {
+	ctx, cancel := s.bound(ctx)
+	defer cancel()
 	tag, err := s.pool.Exec(ctx, `UPDATE tool_operations
 		SET lease_until = now() + $4::bigint * interval '1 millisecond'
 		WHERE op_key = $1 AND owner = $2 AND fence = $3 AND state IN ('claimed', 'dispatching')`,
@@ -465,6 +491,8 @@ func (s *Store) Resolve(ctx context.Context, key, by string, r Resolution) (*Ope
 // Sweep settles operations whose owners vanished: claims are released,
 // because nothing was sent, and dispatches become unknown.
 func (s *Store) Sweep(ctx context.Context, instance string) (released, unknown int64, err error) {
+	ctx, cancel := s.bound(ctx)
+	defer cancel()
 	tag, err := s.pool.Exec(ctx, `UPDATE tool_operations SET
 			state = 'released', lease_until = NULL, finished_at = now(),
 			last_instance = $1, last_detail = '{"reason":"claim lease expired before dispatch"}',
@@ -488,6 +516,8 @@ func (s *Store) Sweep(ctx context.Context, instance string) (released, unknown i
 // PurgeResults drops stored result bodies older than retention. The row and
 // the result hash stay, so the key keeps answering "completed".
 func (s *Store) PurgeResults(ctx context.Context, retention time.Duration) (int64, error) {
+	ctx, cancel := s.bound(ctx)
+	defer cancel()
 	tag, err := s.pool.Exec(ctx, `UPDATE tool_operations
 		SET result = NULL, result_purged = true
 		WHERE result IS NOT NULL AND state = 'completed'
@@ -510,6 +540,8 @@ func (s *Store) List(ctx context.Context, f ListFilter) ([]*Operation, error) {
 	if f.Limit <= 0 {
 		f.Limit = 100
 	}
+	ctx, cancel := s.bound(ctx)
+	defer cancel()
 	states := make([]string, len(f.States))
 	for i, st := range f.States {
 		states[i] = string(st)
@@ -536,6 +568,8 @@ func (s *Store) List(ctx context.Context, f ListFilter) ([]*Operation, error) {
 // Reconcilable returns unknown operations that carry a reconciliation
 // reference, least recently changed first.
 func (s *Store) Reconcilable(ctx context.Context, limit int) ([]*Operation, error) {
+	ctx, cancel := s.bound(ctx)
+	defer cancel()
 	rows, err := s.pool.Query(ctx, `SELECT `+columns+` FROM tool_operations
 		WHERE state = 'unknown' AND reconcile_ref IS NOT NULL
 		ORDER BY updated_at LIMIT $1`, limit)
@@ -567,6 +601,8 @@ type Event struct {
 
 // Events returns an operation's audit trail, oldest first.
 func (s *Store) Events(ctx context.Context, key string) ([]Event, error) {
+	ctx, cancel := s.bound(ctx)
+	defer cancel()
 	rows, err := s.pool.Query(ctx, `SELECT id, at, coalesce(instance, ''), coalesce(from_state::text, ''),
 			to_state::text, fence, detail
 		FROM operation_events WHERE op_key = $1 ORDER BY id`, key)

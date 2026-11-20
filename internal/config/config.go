@@ -71,6 +71,9 @@ type Config struct {
 	// ReconcileInterval is how often unknown outcomes of reconcilable
 	// tools are checked in the background.
 	ReconcileInterval time.Duration `yaml:"reconcile_interval"`
+	// StoreTimeout bounds each statement sent to Postgres, so a database
+	// that stops answering cannot hang a caller.
+	StoreTimeout time.Duration `yaml:"store_timeout"`
 
 	Auth            Auth              `yaml:"auth"`
 	UpstreamHeaders map[string]string `yaml:"upstream_headers"`
@@ -135,6 +138,7 @@ const (
 	DefaultMaxResends      = 2
 	DefaultFoundField      = "found"
 	DefaultReconcileEvery  = 10 * time.Second
+	DefaultStoreTimeout    = 5 * time.Second
 )
 
 // Load reads and validates a config file.
@@ -190,6 +194,9 @@ func (c *Config) applyDefaults() {
 	if c.ReconcileInterval == 0 {
 		c.ReconcileInterval = DefaultReconcileEvery
 	}
+	if c.StoreTimeout == 0 {
+		c.StoreTimeout = DefaultStoreTimeout
+	}
 	for name, t := range c.Tools {
 		if t.Policy == "" {
 			t.Policy = AtMostOnce
@@ -228,6 +235,9 @@ func (c *Config) Validate() error {
 	}
 	if c.WaitTimeout < 0 || c.UpstreamTimeout < 0 || c.FallbackWindow < 0 || c.Retention < 0 || c.ReconcileInterval < 0 {
 		errs = append(errs, errors.New("durations must not be negative"))
+	}
+	if c.StoreTimeout < time.Second/10 {
+		errs = append(errs, errors.New("store_timeout must be at least 100ms"))
 	}
 	if c.UnknownTools != UnknownToolsAtMostOnce && c.UnknownTools != UnknownToolsRefuse {
 		errs = append(errs, fmt.Errorf("unknown_tools must be %q or %q", UnknownToolsAtMostOnce, UnknownToolsRefuse))

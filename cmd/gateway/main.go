@@ -68,6 +68,7 @@ func run(path string, log *slog.Logger) error {
 		return err
 	}
 	defer st.Close()
+	st.SetTimeout(cfg.StoreTimeout)
 
 	gw, err := gateway.New(cfg, st, gateway.Options{Instance: cfg.InstanceID, Logger: log})
 	if err != nil {

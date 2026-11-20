@@ -9,6 +9,7 @@ wait_timeout: 5s       # a duplicate waits this long before "in progress"
 upstream_timeout: 60s  # bound on one call to the upstream server
 fallback_window: 60s   # keyless calls with equal arguments group inside this window
 retention: 720h        # result bodies are dropped after this; keys are kept forever
+store_timeout: 5s      # bound on each Postgres statement, so a hung database cannot hang callers
 unknown_tools: at_most_once  # or "refuse"
 
 # auth:

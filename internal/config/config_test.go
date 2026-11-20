@@ -33,7 +33,8 @@ func TestParseExample(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.Lease != 10*time.Second || c.WaitTimeout != DefaultWaitTimeout || c.Listen != DefaultListen {
+	if c.Lease != 10*time.Second || c.WaitTimeout != DefaultWaitTimeout || c.Listen != DefaultListen ||
+		c.StoreTimeout != DefaultStoreTimeout {
 		t.Fatalf("defaults not applied: %+v", c)
 	}
 	refund := c.Tools["create_refund"]
@@ -83,6 +84,7 @@ func TestRejectsMistakes(t *testing.T) {
 		"key arg wrong policy": "upstream: http://u/mcp\ntools:\n  t:\n    policy: at_most_once\n    key_argument: k\n",
 		"bad store_result":     "upstream: http://u/mcp\ntools:\n  t:\n    store_result: maybe\n",
 		"tiny lease":           "upstream: http://u/mcp\nlease: 1ms\n",
+		"tiny store timeout":   "upstream: http://u/mcp\nstore_timeout: 1ms\n",
 		"both auth modes":      "upstream: http://u/mcp\nauth:\n  tokens: {a: b}\n  principal_header: X-User\n",
 	}
 	for name, doc := range cases {
