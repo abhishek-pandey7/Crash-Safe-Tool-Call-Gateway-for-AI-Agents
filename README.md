@@ -2,7 +2,7 @@
 
 A Go gateway that stops retried or interrupted AI agent tool calls from repeating real-world actions, such as refunds, emails or new tickets.
 
-> **Status: all four tool policies working.** The gateway runs end to end against Postgres and a fake tool server. Its tests kill gateway processes at every step and at random under load, and check each outcome against the tool's own ledger. Postgres outages are tested too, the gateway exports Prometheus metrics, and CI runs everything with the race detector. Docker Compose, published measurements and a check against a real MCP server are not done yet.
+> **Status: all four tool policies working.** The gateway runs end to end against Postgres and a fake tool server. Its tests kill gateway processes at every step and at random under load, and check each outcome against the tool's own ledger. Postgres outages are tested too, the gateway exports Prometheus metrics, CI runs everything with the race detector, and a Docker Compose demo shows the main cases against a live stack. Published measurements and a check against a real MCP server are not done yet.
 
 ## The problem
 
@@ -55,7 +55,27 @@ Each test compares what actually happened (from the fake tool's own ledger) with
 | Postgres outages: refused connections and partitions, before and during a call, and a crash while Postgres is down | Done, `e2e/outage_test.go`. Calls are refused before anything is sent, read-only tools keep working, and a lost write catches up when Postgres returns. Without a statement timeout a partitioned database hung callers; `store_timeout` now bounds every statement |
 | Prometheus metrics at `/-/metrics` | Done, `e2e/metrics_test.go`. Tool labels are limited to configured tools, so callers cannot create unbounded series |
 | CI on GitHub Actions | Done, `.github/workflows/ci.yml`: gofmt, vet, build and the full suite with the race detector against Postgres on every push. On `main`, the random-kill test also runs with five seeds |
-| Docker Compose with Toxiproxy, published measurements, real-server check | Not yet |
+| Docker Compose demo with Toxiproxy | Done, `compose.yaml` and `scripts/demo.sh`. CI builds the images, starts the stack and runs the demo, which fails if any effect count is wrong |
+| Published measurements, real-server check | Not yet |
+
+## Trying it with Docker
+
+```sh
+docker compose up -d --build
+./scripts/demo.sh            # on Windows, run it from Git Bash
+docker compose down -v
+```
+
+The stack runs two gateway instances sharing one Postgres, in front of a fake tool server whose ledger records every effect that really happened. Toxiproxy sits on both the gateways' database connection and their upstream connection. The demo shows four cases and checks each count:
+
+| Case | What happens | Effects |
+|---|---|---|
+| No gateway, refund response lost, agent retries | The refund runs twice | 2 |
+| Email response lost, retried through the other instance | Both attempts get "outcome unknown"; nothing is resent | 1 |
+| Refund response lost, retried through the other instance | A read confirms the refund, and both attempts get the confirmed result | 1 |
+| Postgres cut off, then restored | Nothing is sent while it is down; the retry runs once | 0, then 1 |
+
+Host ports default to 8080 and 8081 (gateways), 8090 (fake tool server) and 8474 (Toxiproxy), all on 127.0.0.1. If one is taken, set `GATEWAY_A_PORT`, `GATEWAY_B_PORT`, `FAKETOOL_PORT` or `TOXIPROXY_PORT` for both `docker compose` and the demo. `docker compose --profile metrics up -d` adds Prometheus on port 9090.
 
 ## Running it
 
@@ -124,6 +144,8 @@ CI runs the same suite with `-race` on Linux. Tests that need Postgres are skipp
 |---|---|
 | `cmd/gateway` | The gateway binary |
 | `cmd/gatewayctl` | The operator command |
+| `cmd/faketool`, `cmd/mcpcall` | The fake tool server on its own, and a command-line MCP client, for the demo |
+| `compose.yaml`, `deploy/` | The Docker Compose demo stack and its configs |
 | `internal/operator` | Recording outcomes a person verified |
 | `internal/gateway` | Request routing, the `tools/call` pipeline, dispatch, responses |
 | `internal/store` | Postgres operation store and migrations |
