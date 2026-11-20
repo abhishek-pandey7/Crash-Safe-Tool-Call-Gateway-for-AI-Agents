@@ -29,6 +29,10 @@ func (g *Gateway) gatewayResult(c *callCtx, status, text string, isError bool, e
 	}
 	maps.Copy(structured, extra)
 	c.out.w.Header().Set("X-Gateway-Status", status)
+	c.outcome = status
+	if status == StatusResultUnavailable {
+		c.outcome = OutcomeReplayed
+	}
 	c.out.final(http.StatusOK, mcp.ResultResponse(c.msg.ID, mcp.TextResult(text, isError, structured)))
 }
 
@@ -36,6 +40,7 @@ func (g *Gateway) gatewayResult(c *callCtx, status, text string, isError bool, e
 // the new request's id.
 func (g *Gateway) replay(c *callCtx, op *store.Operation) {
 	c.out.w.Header().Set("X-Gateway-Replayed", "true")
+	c.outcome = OutcomeReplayed
 	switch {
 	case op.Result != nil && op.ResultKind == store.KindError:
 		c.out.final(http.StatusOK, mcp.RawErrorResponse(c.msg.ID, op.Result))
@@ -94,12 +99,14 @@ func (g *Gateway) respondNotExecuted(c *callCtx, reason string) {
 // same operation may still have run.
 func (g *Gateway) respondStoreDown(c *callCtx, err error) {
 	c.log.Error("operation store unavailable", "err", err)
+	g.metrics.storeErrors.Inc("request")
 	g.gatewayResult(c, StatusStoreUnavailable, fmt.Sprintf(
 		"Not sent: the gateway could not reach its operation store, so it did not send this %s call. "+
 			"Retry later.", c.params.Name), true, nil)
 }
 
 func (g *Gateway) respondConflict(c *callCtx) {
+	c.outcome = OutcomeKeyConflict
 	c.out.final(http.StatusOK, mcp.ErrorResponse(c.msg.ID, mcp.NewError(mcp.CodeKeyConflict,
 		"Operation key conflict: this key was already used for "+c.params.Name+" with different arguments",
 		map[string]any{"operationKey": c.key})))

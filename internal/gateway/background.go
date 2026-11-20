@@ -31,12 +31,14 @@ func (g *Gateway) persist(desc, key string, fn func(context.Context) (bool, erro
 		return
 	}
 	g.log.Warn("state change failed; retrying in the background", "change", desc, "op", key, "err", err)
+	g.metrics.storeErrors.Inc("state_write")
 	select {
 	case g.pending <- pendingWrite{desc: desc, key: key, fn: fn, deadline: time.Now().Add(pendingRetryWindow)}:
 	default:
 		// The lease will lapse and the operation will be settled as
 		// unknown, which is safe.
 		g.log.Error("pending queue full; dropping state change", "change", desc, "op", key)
+		g.metrics.pendingDropped.Inc()
 	}
 }
 
@@ -64,8 +66,11 @@ func (g *Gateway) Run(ctx context.Context) {
 			cancel()
 			if err != nil {
 				g.log.Warn("sweep failed", "err", err)
+				g.metrics.storeErrors.Inc("background")
 			} else if released+unknown > 0 {
 				g.log.Info("settled abandoned operations", "released", released, "unknown", unknown)
+				g.metrics.settled.Add(float64(released), "released")
+				g.metrics.settled.Add(float64(unknown), "unknown")
 			}
 		case <-purge.C:
 			c, cancel := context.WithTimeout(ctx, 30*time.Second)
@@ -73,6 +78,7 @@ func (g *Gateway) Run(ctx context.Context) {
 			cancel()
 			if err != nil {
 				g.log.Warn("purge failed", "err", err)
+				g.metrics.storeErrors.Inc("background")
 			} else if n > 0 {
 				g.log.Info("removed expired result bodies", "count", n)
 			}
@@ -98,6 +104,7 @@ func (g *Gateway) retryPending(ctx context.Context) {
 			}
 			if time.Now().After(w.deadline) {
 				g.log.Error("giving up on state change", "change", w.desc, "op", w.key, "err", err)
+				g.metrics.pendingAbandoned.Inc()
 				break
 			}
 			select {

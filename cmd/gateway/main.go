@@ -5,7 +5,7 @@
 // GATEWAY_INSTANCE_ID override the matching settings.
 //
 // Besides the MCP endpoint, the gateway serves /-/healthz (the process is
-// up) and /-/readyz (Postgres is reachable).
+// up), /-/readyz (Postgres is reachable) and /-/metrics (Prometheus).
 package main
 
 import (
@@ -89,6 +89,7 @@ func run(path string, log *slog.Logger) error {
 		}
 		fmt.Fprintln(w, "ready")
 	})
+	mux.Handle("GET /-/metrics", gw.Metrics().Handler())
 	mux.Handle("/", gw)
 
 	srv := &http.Server{Addr: cfg.Listen, Handler: mux, ReadHeaderTimeout: 10 * time.Second}

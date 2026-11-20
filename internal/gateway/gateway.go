@@ -24,6 +24,7 @@ import (
 	"github.com/abhishek-pandey7/Crash-Safe-Tool-Call-Gateway-for-AI-Agents/internal/config"
 	"github.com/abhishek-pandey7/Crash-Safe-Tool-Call-Gateway-for-AI-Agents/internal/killpoint"
 	"github.com/abhishek-pandey7/Crash-Safe-Tool-Call-Gateway-for-AI-Agents/internal/mcp"
+	"github.com/abhishek-pandey7/Crash-Safe-Tool-Call-Gateway-for-AI-Agents/internal/metrics"
 	"github.com/abhishek-pandey7/Crash-Safe-Tool-Call-Gateway-for-AI-Agents/internal/store"
 )
 
@@ -57,6 +58,9 @@ type Options struct {
 	Instance string
 	Logger   *slog.Logger
 	Hooks    Hooks
+	// Metrics receives the gateway's metrics. A private registry is used
+	// when it is nil.
+	Metrics *metrics.Registry
 }
 
 // Gateway is an http.Handler.
@@ -76,6 +80,9 @@ type Gateway struct {
 	reader  *http.Client
 	proxy   *httputil.ReverseProxy
 	pending chan pendingWrite
+
+	registry *metrics.Registry
+	metrics  *gatewayMetrics
 }
 
 // New builds a gateway.
@@ -90,6 +97,9 @@ func New(cfg *config.Config, st *store.Store, opts Options) (*Gateway, error) {
 	if opts.Logger == nil {
 		opts.Logger = slog.New(slog.NewJSONHandler(os.Stderr, nil))
 	}
+	if opts.Metrics == nil {
+		opts.Metrics = metrics.NewRegistry()
+	}
 	g := &Gateway{
 		cfg:        cfg,
 		store:      st,
@@ -100,7 +110,9 @@ func New(cfg *config.Config, st *store.Store, opts Options) (*Gateway, error) {
 		dispatcher: newDispatchClient(),
 		reader:     &http.Client{Timeout: 15 * time.Second},
 		pending:    make(chan pendingWrite, 1024),
+		registry:   opts.Metrics,
 	}
+	g.metrics = newGatewayMetrics(opts.Metrics, g)
 	g.proxy = &httputil.ReverseProxy{
 		Rewrite: func(pr *httputil.ProxyRequest) {
 			target := *g.upstream
@@ -119,6 +131,9 @@ func New(cfg *config.Config, st *store.Store, opts Options) (*Gateway, error) {
 
 // Instance returns this gateway's instance ID.
 func (g *Gateway) Instance() string { return g.instance }
+
+// Metrics returns the registry holding the gateway's metrics.
+func (g *Gateway) Metrics() *metrics.Registry { return g.registry }
 
 // DefaultInstanceID combines the host name, process ID and a random suffix.
 func DefaultInstanceID() string {

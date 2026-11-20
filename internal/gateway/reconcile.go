@@ -153,6 +153,7 @@ func (g *Gateway) reconcile(ctx context.Context, op *store.Operation, pol config
 	var res store.Resolution
 	switch answer {
 	case found:
+		g.metrics.reconciliations.Inc("found")
 		body := mcp.TextResult(fmt.Sprintf(
 			"Completed: the response from %s was lost, but %s confirms that it took effect.", op.Tool, r.Tool),
 			false, map[string]any{"gatewayStatus": StatusReconciled, "reconciledWith": r.Tool, "evidence": evidence})
@@ -163,15 +164,18 @@ func (g *Gateway) reconcile(ctx context.Context, op *store.Operation, pol config
 		}
 	case notFound:
 		if op.DispatchedAt == nil || op.Now.Sub(*op.DispatchedAt) < r.SettleAfter {
+			g.metrics.reconciliations.Inc("not_found_too_early")
 			log.Info("read found nothing, but the call may still be in flight; outcome stays unknown")
 			return op, false
 		}
+		g.metrics.reconciliations.Inc("not_found_settled")
 		res = store.Resolution{
 			State: store.NotExecuted,
 			Evidence: map[string]any{"reconciledWith": r.Tool, "found": false, "read": evidence,
 				"settleAfterMs": r.SettleAfter.Milliseconds()},
 		}
 	default:
+		g.metrics.reconciliations.Inc("inconclusive")
 		log.Info("reconciliation inconclusive; outcome stays unknown", "err", err)
 		return op, false
 	}
@@ -199,6 +203,7 @@ func (g *Gateway) reconcileUnknown(ctx context.Context) {
 	ops, err := g.store.Reconcilable(ctx, 50)
 	if err != nil {
 		g.log.Warn("listing unknown operations failed", "err", err)
+		g.metrics.storeErrors.Inc("background")
 		return
 	}
 	for _, op := range ops {

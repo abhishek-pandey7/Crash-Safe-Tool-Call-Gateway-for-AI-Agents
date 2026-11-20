@@ -43,6 +43,8 @@ type callCtx struct {
 	key       string
 	waitUntil time.Time
 	log       *slog.Logger
+	// outcome is how the caller was answered, for metrics.
+	outcome string
 }
 
 // storeCtx is detached from the client: a client hanging up must not
@@ -58,16 +60,19 @@ func (c *callCtx) bind(key string) {
 func (g *Gateway) handleCall(w http.ResponseWriter, r *http.Request, body []byte, msg *mcp.Message, principal string) {
 	p, err := mcp.ParseCallParams(msg.Params)
 	if err != nil {
+		g.countCall("", "", OutcomeInvalid)
 		writeJSONRPC(w, http.StatusBadRequest, mcp.ErrorResponse(msg.ID, mcp.NewError(mcp.CodeInvalidParams, err.Error(), nil)))
 		return
 	}
 	pol, allowed := g.cfg.ToolPolicy(p.Name)
 	if !allowed {
+		g.countCall(p.Name, "", OutcomeRefused)
 		writeJSONRPC(w, http.StatusOK, mcp.ErrorResponse(msg.ID,
 			mcp.NewError(mcp.CodeInvalidParams, "Unknown tool: "+p.Name+" is not allowed by the gateway", nil)))
 		return
 	}
 	if pol.Policy == config.ReadOnly {
+		g.countCall(p.Name, string(pol.Policy), OutcomeReadOnly)
 		g.forward(w, r, body)
 		return
 	}
@@ -87,10 +92,12 @@ func (g *Gateway) handleCall(w http.ResponseWriter, r *http.Request, body []byte
 	}
 	id, err := opkey.Derive(opkey.Scope{Principal: principal, Upstream: g.cfg.Upstream, Tool: p.Name}, in)
 	if err != nil {
+		g.countCall(p.Name, string(pol.Policy), OutcomeInvalid)
 		writeJSONRPC(w, http.StatusOK, mcp.ErrorResponse(msg.ID, mcp.NewError(mcp.CodeInvalidParams, err.Error(), nil)))
 		return
 	}
 	if pol.RequireKey && !id.Keyed() {
+		g.countCall(p.Name, string(pol.Policy), OutcomeKeyRequired)
 		writeJSONRPC(w, http.StatusOK, mcp.ErrorResponse(msg.ID, mcp.NewError(mcp.CodeKeyRequired,
 			"Operation key required: "+p.Name+" only runs with a stable key in _meta",
 			map[string]any{"metaKeys": []string{opkey.MetaOperationKey, opkey.MetaRunID + " + " + opkey.MetaStepID}})))
@@ -102,8 +109,10 @@ func (g *Gateway) handleCall(w http.ResponseWriter, r *http.Request, body []byte
 		out:       &responder{w: w},
 		waitUntil: time.Now().Add(g.cfg.WaitTimeout),
 		log:       g.log.With("tool", p.Name),
+		outcome:   OutcomeClientLeft,
 	}
 	g.run(c)
+	g.countCall(p.Name, string(pol.Policy), c.outcome)
 }
 
 func (g *Gateway) run(c *callCtx) {
@@ -310,7 +319,9 @@ func (g *Gateway) dispatchOwned(c *callCtx, op *store.Operation, hb *heartbeat, 
 
 	var res dispatchResult
 	for attempt := 0; ; attempt++ {
+		start := time.Now()
 		res = g.send(c, op, body)
+		g.observeDispatch(c.pol.Policy, res, time.Since(start))
 		if res.final != nil || !res.maybeSent || c.pol.Policy != config.NativeKey || attempt >= c.pol.MaxResends {
 			break
 		}
@@ -325,6 +336,10 @@ func (g *Gateway) dispatchOwned(c *callCtx, op *store.Operation, hb *heartbeat, 
 	g.at(PointResponseRead, op.Key)
 	g.commit(c, op, res.final)
 	g.at(PointAfterCommit, op.Key)
+	c.outcome = OutcomeCompleted
+	if len(res.final.Result) > 0 && mcp.ResultType(res.final.Result) == mcp.ResultInputRequired {
+		c.outcome = OutcomeInputRequired
+	}
 	status := res.status
 	if status == 0 {
 		status = http.StatusOK
