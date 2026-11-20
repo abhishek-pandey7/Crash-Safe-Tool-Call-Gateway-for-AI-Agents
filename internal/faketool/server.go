@@ -28,6 +28,9 @@ const TasksExtension = "io.modelcontextprotocol/tasks"
 type Fault struct {
 	// Tool limits the fault to one tool; empty matches any tool.
 	Tool string `json:"tool,omitempty"`
+	// Reference limits the fault to calls whose reference, idempotency_key
+	// or to argument has this value; empty matches any call.
+	Reference string `json:"reference,omitempty"`
 	// DropResponse performs the effect, then closes the connection
 	// without sending a response: the lost-response case.
 	DropResponse bool `json:"dropResponse,omitempty"`
@@ -98,11 +101,15 @@ func (s *Server) Requests(tool string) int {
 	return s.requests[tool]
 }
 
-func (s *Server) takeFault(tool string) Fault {
+func (s *Server) takeFault(tool string, c *call) Fault {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for i, f := range s.faults {
 		if f.Tool != "" && f.Tool != tool {
+			continue
+		}
+		if f.Reference != "" && f.Reference != c.str("reference") &&
+			f.Reference != c.str("idempotency_key") && f.Reference != c.str("to") {
 			continue
 		}
 		f.Times--
@@ -252,7 +259,7 @@ func (s *Server) callTool(w http.ResponseWriter, r *http.Request, msg *mcp.Messa
 		writeRPC(w, http.StatusOK, mcp.ErrorResponse(msg.ID, mcp.NewError(mcp.CodeInvalidParams, "Unknown tool: "+p.Name, nil)))
 		return
 	}
-	fault := s.takeFault(p.Name)
+	fault := s.takeFault(p.Name, c)
 
 	if fault.DelayBeforeMs > 0 {
 		ctx := r.Context()

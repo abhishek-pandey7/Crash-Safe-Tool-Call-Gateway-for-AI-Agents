@@ -88,6 +88,18 @@ func TestDropResponseLosesTheReplyNotTheEffect(t *testing.T) {
 	}
 }
 
+func TestFaultCanTargetOneReference(t *testing.T) {
+	fake, c := start(t)
+	fake.AddFault(faketool.Fault{Tool: "create_refund", Reference: "r2", DropResponse: true})
+	if _, err := c.Call(ctx, "create_refund", map[string]any{"reference": "r1", "amount": 20}, mcpclient.CallOptions{}); err != nil {
+		t.Fatalf("another reference took the fault: %v", err)
+	}
+	_, err := c.Call(ctx, "create_refund", map[string]any{"reference": "r2", "amount": 20}, mcpclient.CallOptions{})
+	if !errors.Is(err, mcpclient.ErrTransport) {
+		t.Fatalf("the targeted reference did not take the fault: %v", err)
+	}
+}
+
 func TestCancelBeforeEffect(t *testing.T) {
 	fake, c := start(t)
 	fake.AddFault(faketool.Fault{Tool: "send_email", DelayBeforeMs: 500})
