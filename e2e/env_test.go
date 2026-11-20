@@ -6,12 +6,14 @@ import (
 	"io"
 	"log/slog"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"testing"
 	"time"
 
 	"github.com/abhishek-pandey7/Crash-Safe-Tool-Call-Gateway-for-AI-Agents/internal/config"
 	"github.com/abhishek-pandey7/Crash-Safe-Tool-Call-Gateway-for-AI-Agents/internal/faketool"
+	"github.com/abhishek-pandey7/Crash-Safe-Tool-Call-Gateway-for-AI-Agents/internal/faultproxy"
 	"github.com/abhishek-pandey7/Crash-Safe-Tool-Call-Gateway-for-AI-Agents/internal/gateway"
 	"github.com/abhishek-pandey7/Crash-Safe-Tool-Call-Gateway-for-AI-Agents/internal/mcpclient"
 	"github.com/abhishek-pandey7/Crash-Safe-Tool-Call-Gateway-for-AI-Agents/internal/store"
@@ -60,15 +62,18 @@ type env struct {
 	gw     *gateway.Gateway
 	url    string
 	client *mcpclient.Client
+	// db sits between the gateway and Postgres when proxyStore is set.
+	db *faultproxy.Proxy
 }
 
 type envOptions struct {
-	upstream string // overrides the fake server's URL
-	refund   string // create_refund policy; at_most_once by default
-	extra    string // extra YAML appended to the config
-	hooks    gateway.Hooks
-	instance string
-	noRun    bool // skip background work
+	upstream   string // overrides the fake server's URL
+	refund     string // create_refund policy; at_most_once by default
+	extra      string // extra YAML appended to the config
+	hooks      gateway.Hooks
+	instance   string
+	noRun      bool // skip background work
+	proxyStore bool // reach Postgres through a fault proxy
 }
 
 func testLogger() *slog.Logger {
@@ -88,14 +93,46 @@ func newEnv(t *testing.T, o envOptions) *env {
 	if err != nil {
 		t.Fatal(err)
 	}
-	st := storetest.New(t)
-	e := &env{fake: fake, store: st, cfg: cfg}
+	e := &env{fake: fake, cfg: cfg}
+	if o.proxyStore {
+		e.db, e.store = proxiedStore(t)
+	} else {
+		e.store = storetest.New(t)
+	}
+	e.store.SetTimeout(cfg.StoreTimeout)
 	e.gw = e.addGateway(t, o.instance, o.hooks, !o.noRun)
 	srv := httptest.NewServer(e.gw)
 	t.Cleanup(srv.Close)
 	e.url = srv.URL + "/mcp"
 	e.client = mcpclient.New(e.url)
 	return e
+}
+
+// proxiedStore opens a store in a fresh schema whose connections go through
+// a fault proxy, so a test can cut or stall Postgres.
+func proxiedStore(t *testing.T) (*faultproxy.Proxy, *store.Store) {
+	t.Helper()
+	u, err := url.Parse(storetest.URL(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := faultproxy.Start(u.Host)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { p.Close() })
+	u.Host = p.Addr()
+	q := u.Query()
+	q.Set("pool_max_conns", "4")
+	u.RawQuery = q.Encode()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	st, err := store.Open(ctx, u.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(st.Close)
+	return p, st
 }
 
 // addGateway starts another gateway instance on the same store and config.
