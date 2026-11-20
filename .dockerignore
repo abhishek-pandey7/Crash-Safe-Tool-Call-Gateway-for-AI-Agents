@@ -3,6 +3,7 @@
 bin
 results
 docs
+interop
 *.exe
 *.test
 *.out

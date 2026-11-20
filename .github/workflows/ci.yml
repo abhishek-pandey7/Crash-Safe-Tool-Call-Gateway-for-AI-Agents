@@ -55,6 +55,14 @@ jobs:
       - name: test with the race detector
         run: go test -race -count=1 -timeout 20m ./...
 
+      # The gateway between the official MCP Go SDK's client and server.
+      # A separate module, so the SDK is not a dependency of the gateway.
+      - name: interop with the official Go SDK
+        working-directory: interop
+        run: |
+          go vet ./...
+          go test -race -count=1 -timeout 10m ./...
+
   chaos:
     # Random kills under load with more seeds. Slower, so only on main and
     # on request.
